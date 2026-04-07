@@ -58,27 +58,30 @@ def extraer_texto_excel(file_bytes):
                 text += fila + "\n"
     return text.strip()
 
-def extraer_texto_email(file_bytes):
+def extraer_texto_email(file_bytes, filename):
     import re
-    msg = email.message_from_bytes(file_bytes)
-    text = f"Asunto: {msg.get('Subject', '')}\n"
-    text += f"De: {msg.get('From', '')}\n"
-    text += f"Fecha: {msg.get('Date', '')}\n\n"
-    for part in msg.walk():
-        ct = part.get_content_type()
-        if ct == "text/plain":
-            payload = part.get_payload(decode=True)
-            if payload:
-                text += payload.decode("utf-8", errors="ignore")
-        elif ct == "text/html":
-            payload = part.get_payload(decode=True)
-            if payload:
-                html = payload.decode("utf-8", errors="ignore")
-                clean = re.sub('<[^>]+>', ' ', html)
-                clean = re.sub(r'\s+', ' ', clean).strip()
-                if len(clean) > 100:
-                    text += clean
-    return text.strip()
+    ext = filename.lower().split('.')[-1]
+    
+    if ext == 'msg':
+        import extract_msg
+        msg = extract_msg.Message(io.BytesIO(file_bytes))
+        text = f"Asunto: {msg.subject or ''}\n"
+        text += f"De: {msg.sender or ''}\n"
+        text += f"Fecha: {msg.date or ''}\n\n"
+        text += msg.body or ""
+        return text.strip()
+    else:
+        msg = email.message_from_bytes(file_bytes)
+        text = f"Asunto: {msg.get('Subject', '')}\n"
+        text += f"De: {msg.get('From', '')}\n"
+        text += f"Fecha: {msg.get('Date', '')}\n\n"
+        for part in msg.walk():
+            ct = part.get_content_type()
+            if ct == "text/plain":
+                payload = part.get_payload(decode=True)
+                if payload:
+                    text += payload.decode("utf-8", errors="ignore")
+        return text.strip() 
 
 def extraer_contenido(file_bytes, filename):
     ext = filename.lower().split('.')[-1]
@@ -89,7 +92,7 @@ def extraer_contenido(file_bytes, filename):
     elif ext in ['xls', 'xlsx']:
         return {"tipo": "texto", "contenido": extraer_texto_excel(file_bytes)}
     elif ext in ['eml', 'msg']:
-        return {"tipo": "texto", "contenido": extraer_texto_email(file_bytes)}
+    return {"tipo": "texto", "contenido": extraer_texto_email(file_bytes, filename)}
     elif ext in ['txt', 'csv']:
         return {"tipo": "texto", "contenido": file_bytes.decode("utf-8", errors="ignore")}
     elif ext in ['png', 'jpg', 'jpeg', 'gif', 'webp', 'bmp']:
