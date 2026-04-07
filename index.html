@@ -64,7 +64,7 @@
       <p style="font-size:0.8rem; margin-top:4px;">o arrastrá el archivo acá</p>
       <div class="filename" id="nombreArchivo"></div>
     </div>
-    <input type="file" id="fileInput" accept=".pdf">
+    <<input type="file" id="fileInput" accept=".pdf,.doc,.docx,.xls,.xlsx,.eml,.msg,.txt,.csv,.png,.jpg,.jpeg,.gif,.webp,.bmp">
 
     <button class="btn" id="btnAnalizar" disabled onclick="analizar()">Analizar informe</button>
     <div class="error" id="errorMsg"></div>
@@ -102,7 +102,9 @@
   document.getElementById('cliente').addEventListener('change', verificarListo);
 
   function cargarArchivo(file) {
-    if (!file.name.endsWith('.pdf')) { mostrarError('Solo se aceptan archivos PDF.'); return; }
+    const formatosValidos = ['pdf','doc','docx','xls','xlsx','eml','msg','txt','csv','png','jpg','jpeg','gif','webp','bmp'];
+const ext = file.name.split('.').pop().toLowerCase();
+if (!formatosValidos.includes(ext)) { mostrarError('Formato no soportado. Subí PDF, Word, Excel, imagen o email.'); return; }
     archivoSeleccionado = file;
     dropZone.classList.add('has-file');
     document.getElementById('nombreArchivo').textContent = file.name;
