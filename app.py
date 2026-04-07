@@ -1,11 +1,11 @@
 import os
-import base64
 import json
 import io
+import base64
+import email
 from flask import Flask, request, jsonify, send_from_directory
 from openai import OpenAI
 from dotenv import load_dotenv
-from pypdf import PdfReader
 
 load_dotenv()
 
@@ -28,12 +28,76 @@ CRITERIOS = {
     ],
 }
 
-def extract_text_from_pdf(pdf_bytes):
-    reader = PdfReader(io.BytesIO(pdf_bytes))
+def extraer_texto_pdf(file_bytes):
+    from pypdf import PdfReader
+    reader = PdfReader(io.BytesIO(file_bytes))
     text = ""
     for page in reader.pages:
         text += page.extract_text() or ""
-    return text
+    return text.strip()
+
+def extraer_texto_word(file_bytes):
+    import docx
+    doc = docx.Document(io.BytesIO(file_bytes))
+    text = "\n".join([p.text for p in doc.paragraphs if p.text.strip()])
+    for table in doc.tables:
+        for row in table.rows:
+            text += "\n" + " | ".join([cell.text for cell in row.cells])
+    return text.strip()
+
+def extraer_texto_excel(file_bytes):
+    import openpyxl
+    wb = openpyxl.load_workbook(io.BytesIO(file_bytes), read_only=True)
+    text = ""
+    for sheet in wb.sheetnames:
+        ws = wb[sheet]
+        text += f"\nHoja: {sheet}\n"
+        for row in ws.iter_rows(values_only=True):
+            fila = " | ".join([str(c) if c is not None else "" for c in row])
+            if fila.strip():
+                text += fila + "\n"
+    return text.strip()
+
+def extraer_texto_email(file_bytes):
+    import re
+    msg = email.message_from_bytes(file_bytes)
+    text = f"Asunto: {msg.get('Subject', '')}\n"
+    text += f"De: {msg.get('From', '')}\n"
+    text += f"Fecha: {msg.get('Date', '')}\n\n"
+    for part in msg.walk():
+        ct = part.get_content_type()
+        if ct == "text/plain":
+            payload = part.get_payload(decode=True)
+            if payload:
+                text += payload.decode("utf-8", errors="ignore")
+        elif ct == "text/html":
+            payload = part.get_payload(decode=True)
+            if payload:
+                html = payload.decode("utf-8", errors="ignore")
+                clean = re.sub('<[^>]+>', ' ', html)
+                clean = re.sub(r'\s+', ' ', clean).strip()
+                if len(clean) > 100:
+                    text += clean
+    return text.strip()
+
+def extraer_contenido(file_bytes, filename):
+    ext = filename.lower().split('.')[-1]
+    if ext == 'pdf':
+        return {"tipo": "texto", "contenido": extraer_texto_pdf(file_bytes)}
+    elif ext in ['doc', 'docx']:
+        return {"tipo": "texto", "contenido": extraer_texto_word(file_bytes)}
+    elif ext in ['xls', 'xlsx']:
+        return {"tipo": "texto", "contenido": extraer_texto_excel(file_bytes)}
+    elif ext in ['eml', 'msg']:
+        return {"tipo": "texto", "contenido": extraer_texto_email(file_bytes)}
+    elif ext in ['txt', 'csv']:
+        return {"tipo": "texto", "contenido": file_bytes.decode("utf-8", errors="ignore")}
+    elif ext in ['png', 'jpg', 'jpeg', 'gif', 'webp', 'bmp']:
+        b64 = base64.b64encode(file_bytes).decode("utf-8")
+        mime = f"image/{ext}" if ext != 'jpg' else "image/jpeg"
+        return {"tipo": "imagen", "contenido": b64, "mime": mime}
+    else:
+        return {"tipo": "error", "contenido": "Formato no soportado"}
 
 @app.route("/")
 def index():
@@ -44,30 +108,27 @@ def analizar():
     try:
         cliente = request.form.get("cliente")
         archivo = request.files.get("archivo")
-
         if not cliente or not archivo:
             return jsonify({"error": "Faltan datos"}), 400
 
-        pdf_bytes = archivo.read()
-        texto_pdf = extract_text_from_pdf(pdf_bytes)
+        file_bytes = archivo.read()
+        filename = archivo.filename
+        resultado_extraccion = extraer_contenido(file_bytes, filename)
 
-        if not texto_pdf or len(texto_pdf.strip()) < 50:
-            return jsonify({"error": "No se pudo extraer texto del PDF"}), 400
+        if resultado_extraccion["tipo"] == "error":
+            return jsonify({"error": resultado_extraccion["contenido"]}), 400
 
         criterios = CRITERIOS.get(cliente, [])
         criterios_texto = "\n".join(
             [f'{i+1}. "{c["texto"]}" → {c["calificacion"]}' for i, c in enumerate(criterios)]
         )
 
-        prompt = f"""Sos un agente especializado en análisis de informes de calidad (QC) de exportaciones de cítricos de URUD'OR S.A.
+        prompt_base = f"""Sos un agente especializado en análisis de informes de calidad (QC) de exportaciones de cítricos de URUD'OR S.A.
 
-Tu tarea es analizar el siguiente texto extraído de un informe QC del cliente {cliente} y determinar la calificación según estos criterios:
+Tu tarea es analizar el informe del cliente {cliente} y determinar la calificación según estos criterios:
 
 CRITERIOS PARA {cliente.upper()}:
 {criterios_texto}
-
-TEXTO DEL INFORME:
-{texto_pdf}
 
 Respondé ÚNICAMENTE con un objeto JSON válido con esta estructura:
 {{
@@ -82,9 +143,21 @@ Respondé ÚNICAMENTE con un objeto JSON válido con esta estructura:
 
 No incluyas texto fuera del JSON. No uses markdown ni backticks."""
 
+        if resultado_extraccion["tipo"] == "texto":
+            contenido = resultado_extraccion["contenido"]
+            if not contenido or len(contenido.strip()) < 30:
+                return jsonify({"error": "No se pudo extraer contenido del archivo"}), 400
+            messages = [{"role": "user", "content": prompt_base + f"\n\nCONTENIDO DEL INFORME:\n{contenido}"}]
+
+        elif resultado_extraccion["tipo"] == "imagen":
+            messages = [{"role": "user", "content": [
+                {"type": "text", "text": prompt_base + "\n\nEl informe se adjunta como imagen:"},
+                {"type": "image_url", "image_url": {"url": f"data:{resultado_extraccion['mime']};base64,{resultado_extraccion['contenido']}"}}
+            ]}]
+
         response = client.chat.completions.create(
             model="gpt-4o",
-            messages=[{"role": "user", "content": prompt}],
+            messages=messages,
             max_tokens=1000
         )
 

@@ -3,3 +3,5 @@ openai
 pypdf
 python-dotenv
 gunicorn
+python-docx
+openpyxl
