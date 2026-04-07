@@ -92,7 +92,7 @@ def extraer_contenido(file_bytes, filename):
     elif ext in ['xls', 'xlsx']:
         return {"tipo": "texto", "contenido": extraer_texto_excel(file_bytes)}
     elif ext in ['eml', 'msg']:
-    return {"tipo": "texto", "contenido": extraer_texto_email(file_bytes, filename)}
+        return {"tipo": "texto", "contenido": extraer_texto_email(file_bytes, filename)}
     elif ext in ['txt', 'csv']:
         return {"tipo": "texto", "contenido": file_bytes.decode("utf-8", errors="ignore")}
     elif ext in ['png', 'jpg', 'jpeg', 'gif', 'webp', 'bmp']:
