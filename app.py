@@ -1,8 +1,11 @@
 import os
 import base64
+import json
+import io
 from flask import Flask, request, jsonify, send_from_directory
 from openai import OpenAI
 from dotenv import load_dotenv
+from pypdf import PdfReader
 
 load_dotenv()
 
@@ -25,6 +28,13 @@ CRITERIOS = {
     ],
 }
 
+def extract_text_from_pdf(pdf_bytes):
+    reader = PdfReader(io.BytesIO(pdf_bytes))
+    text = ""
+    for page in reader.pages:
+        text += page.extract_text() or ""
+    return text
+
 @app.route("/")
 def index():
     return send_from_directory(".", "index.html")
@@ -39,7 +49,10 @@ def analizar():
             return jsonify({"error": "Faltan datos"}), 400
 
         pdf_bytes = archivo.read()
-        pdf_b64 = base64.b64encode(pdf_bytes).decode("utf-8")
+        texto_pdf = extract_text_from_pdf(pdf_bytes)
+
+        if not texto_pdf or len(texto_pdf.strip()) < 50:
+            return jsonify({"error": "No se pudo extraer texto del PDF"}), 400
 
         criterios = CRITERIOS.get(cliente, [])
         criterios_texto = "\n".join(
@@ -48,10 +61,13 @@ def analizar():
 
         prompt = f"""Sos un agente especializado en análisis de informes de calidad (QC) de exportaciones de cítricos de URUD'OR S.A.
 
-Tu tarea es leer el informe PDF del cliente {cliente} y determinar la calificación según estos criterios:
+Tu tarea es analizar el siguiente texto extraído de un informe QC del cliente {cliente} y determinar la calificación según estos criterios:
 
 CRITERIOS PARA {cliente.upper()}:
 {criterios_texto}
+
+TEXTO DEL INFORME:
+{texto_pdf}
 
 Respondé ÚNICAMENTE con un objeto JSON válido con esta estructura:
 {{
@@ -60,38 +76,20 @@ Respondé ÚNICAMENTE con un objeto JSON válido con esta estructura:
   "variedad": "variedad de fruta",
   "arrival": "fecha de llegada",
   "calificacion": "BUENO|ACEPTABLE|REGULAR|POBRE",
-  "scores_detectados": "valores clave encontrados en el informe",
-  "razonamiento": "explicación breve en español de por qué corresponde esa calificación"
+  "scores_detectados": "valores clave encontrados en el informe que determinaron la calificacion",
+  "razonamiento": "explicación breve en español de por qué corresponde esa calificación según los criterios"
 }}
 
 No incluyas texto fuera del JSON. No uses markdown ni backticks."""
 
         response = client.chat.completions.create(
             model="gpt-4o",
-            messages=[
-                {
-                    "role": "user",
-                    "content": [
-                        {
-                            "type": "text",
-                            "text": prompt
-                        },
-                        {
-                            "type": "image_url",
-                            "image_url": {
-                                "url": f"data:application/pdf;base64,{pdf_b64}"
-                            }
-                        }
-                    ]
-                }
-            ],
+            messages=[{"role": "user", "content": prompt}],
             max_tokens=1000
         )
 
         resultado = response.choices[0].message.content.strip()
         resultado = resultado.replace("```json", "").replace("```", "").strip()
-
-        import json
         data = json.loads(resultado)
         return jsonify(data)
 
