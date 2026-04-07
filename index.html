@@ -1,0 +1,167 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>URUD'OR — Agente QC</title>
+  <style>
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body { font-family: 'Segoe UI', sans-serif; background: #f0f4f8; min-height: 100vh; }
+    .header { background: #1a1a2e; color: white; padding: 1.2rem 2rem; display: flex; align-items: center; gap: 1rem; }
+    .header h1 { font-size: 1.2rem; font-weight: 600; }
+    .header p { font-size: 0.8rem; opacity: 0.7; margin-top: 2px; }
+    .container { max-width: 700px; margin: 2rem auto; padding: 0 1rem; }
+    .card { background: white; border-radius: 12px; padding: 2rem; box-shadow: 0 2px 8px rgba(0,0,0,0.08); margin-bottom: 1.5rem; }
+    label { display: block; font-size: 0.85rem; font-weight: 600; color: #555; margin-bottom: 6px; }
+    select { width: 100%; padding: 10px 12px; border: 1px solid #ddd; border-radius: 8px; font-size: 0.95rem; margin-bottom: 1.2rem; background: white; }
+    .drop-zone { border: 2px dashed #ccd; border-radius: 10px; padding: 2rem; text-align: center; cursor: pointer; transition: all 0.2s; margin-bottom: 1.2rem; }
+    .drop-zone:hover { background: #f5f7ff; border-color: #667eea; }
+    .drop-zone.has-file { border-style: solid; border-color: #48bb78; background: #f0fff4; }
+    .drop-zone p { color: #888; font-size: 0.9rem; }
+    .drop-zone .filename { color: #48bb78; font-weight: 600; margin-top: 6px; }
+    input[type="file"] { display: none; }
+    .btn { width: 100%; padding: 12px; background: #1a1a2e; color: white; border: none; border-radius: 8px; font-size: 1rem; font-weight: 600; cursor: pointer; transition: background 0.2s; }
+    .btn:hover { background: #2d2d4e; }
+    .btn:disabled { opacity: 0.5; cursor: not-allowed; }
+    .resultado { display: none; }
+    .badge { display: inline-block; padding: 6px 18px; border-radius: 20px; font-weight: 700; font-size: 1rem; margin-bottom: 1rem; }
+    .badge-BUENO { background: #c6f6d5; color: #276749; }
+    .badge-ACEPTABLE { background: #bee3f8; color: #2a69ac; }
+    .badge-REGULAR { background: #fefcbf; color: #744210; }
+    .badge-POBRE { background: #fed7d7; color: #9b2335; }
+    .dato { display: flex; justify-content: space-between; padding: 8px 0; border-bottom: 1px solid #f0f0f0; font-size: 0.9rem; }
+    .dato:last-child { border-bottom: none; }
+    .dato-label { color: #888; }
+    .dato-valor { font-weight: 600; color: #333; }
+    .razonamiento { background: #f8f9fa; border-radius: 8px; padding: 1rem; margin-top: 1rem; font-size: 0.85rem; color: #555; line-height: 1.6; }
+    .razonamiento-titulo { font-size: 0.75rem; font-weight: 700; color: #999; margin-bottom: 6px; text-transform: uppercase; }
+    .loading { text-align: center; padding: 1.5rem; color: #888; display: none; }
+    .error { background: #fed7d7; color: #9b2335; padding: 1rem; border-radius: 8px; margin-top: 1rem; display: none; font-size: 0.9rem; }
+  </style>
+</head>
+<body>
+
+<div class="header">
+  <div>
+    <h1>URUD'OR S.A. — Agente de Análisis QC</h1>
+    <p>Clasificación automática de informes de calidad</p>
+  </div>
+</div>
+
+<div class="container">
+  <div class="card">
+    <label>Cliente</label>
+    <select id="cliente">
+      <option value="">Seleccionar cliente...</option>
+      <option value="Cobana">Cobana GmbH</option>
+      <option value="Oppy">Oppy</option>
+    </select>
+
+    <label>Informe QC (PDF)</label>
+    <div class="drop-zone" id="dropZone" onclick="document.getElementById('fileInput').click()">
+      <p>Hacé clic para subir el PDF del informe</p>
+      <p style="font-size:0.8rem; margin-top:4px;">o arrastrá el archivo acá</p>
+      <div class="filename" id="nombreArchivo"></div>
+    </div>
+    <input type="file" id="fileInput" accept=".pdf">
+
+    <button class="btn" id="btnAnalizar" disabled onclick="analizar()">Analizar informe</button>
+    <div class="error" id="errorMsg"></div>
+  </div>
+
+  <div class="loading" id="loading">Analizando informe, por favor esperá...</div>
+
+  <div class="card resultado" id="resultado">
+    <div id="badge"></div>
+    <div id="datos"></div>
+    <div class="razonamiento">
+      <div class="razonamiento-titulo">Razonamiento del agente</div>
+      <div id="razonamiento"></div>
+    </div>
+  </div>
+</div>
+
+<script>
+  const dropZone = document.getElementById('dropZone');
+  const fileInput = document.getElementById('fileInput');
+  let archivoSeleccionado = null;
+
+  fileInput.addEventListener('change', e => {
+    if (e.target.files[0]) cargarArchivo(e.target.files[0]);
+  });
+
+  dropZone.addEventListener('dragover', e => { e.preventDefault(); dropZone.style.background = '#f5f7ff'; });
+  dropZone.addEventListener('dragleave', () => { dropZone.style.background = ''; });
+  dropZone.addEventListener('drop', e => {
+    e.preventDefault();
+    dropZone.style.background = '';
+    if (e.dataTransfer.files[0]) cargarArchivo(e.dataTransfer.files[0]);
+  });
+
+  document.getElementById('cliente').addEventListener('change', verificarListo);
+
+  function cargarArchivo(file) {
+    if (!file.name.endsWith('.pdf')) { mostrarError('Solo se aceptan archivos PDF.'); return; }
+    archivoSeleccionado = file;
+    dropZone.classList.add('has-file');
+    document.getElementById('nombreArchivo').textContent = file.name;
+    dropZone.querySelector('p').style.display = 'none';
+    verificarListo();
+  }
+
+  function verificarListo() {
+    const cliente = document.getElementById('cliente').value;
+    document.getElementById('btnAnalizar').disabled = !(archivoSeleccionado && cliente);
+  }
+
+  function mostrarError(msg) {
+    const el = document.getElementById('errorMsg');
+    el.textContent = msg;
+    el.style.display = 'block';
+    setTimeout(() => el.style.display = 'none', 5000);
+  }
+
+  async function analizar() {
+    const cliente = document.getElementById('cliente').value;
+    if (!archivoSeleccionado || !cliente) return;
+
+    document.getElementById('btnAnalizar').disabled = true;
+    document.getElementById('loading').style.display = 'block';
+    document.getElementById('resultado').style.display = 'none';
+    document.getElementById('errorMsg').style.display = 'none';
+
+    const formData = new FormData();
+    formData.append('cliente', cliente);
+    formData.append('archivo', archivoSeleccionado);
+
+    try {
+      const response = await fetch('/analizar', { method: 'POST', body: formData });
+      const data = await response.json();
+
+      document.getElementById('loading').style.display = 'none';
+
+      if (data.error) { mostrarError('Error: ' + data.error); document.getElementById('btnAnalizar').disabled = false; return; }
+
+      const cal = data.calificacion || '';
+      document.getElementById('badge').innerHTML = `<span class="badge badge-${cal}">${cal}</span>`;
+      document.getElementById('datos').innerHTML = `
+        <div class="dato"><span class="dato-label">Contenedor</span><span class="dato-valor">${data.contenedor || '—'}</span></div>
+        <div class="dato"><span class="dato-label">Buque</span><span class="dato-valor">${data.buque || '—'}</span></div>
+        <div class="dato"><span class="dato-label">Variedad</span><span class="dato-valor">${data.variedad || '—'}</span></div>
+        <div class="dato"><span class="dato-label">Fecha de llegada</span><span class="dato-valor">${data.arrival || '—'}</span></div>
+        <div class="dato"><span class="dato-label">Cliente</span><span class="dato-valor">${cliente}</span></div>
+        <div class="dato"><span class="dato-label">Scores detectados</span><span class="dato-valor">${data.scores_detectados || '—'}</span></div>
+      `;
+      document.getElementById('razonamiento').textContent = data.razonamiento || '';
+      document.getElementById('resultado').style.display = 'block';
+      document.getElementById('btnAnalizar').disabled = false;
+
+    } catch(err) {
+      document.getElementById('loading').style.display = 'none';
+      mostrarError('Error de conexión. Intentá de nuevo.');
+      document.getElementById('btnAnalizar').disabled = false;
+    }
+  }
+</script>
+</body>
+</html>
